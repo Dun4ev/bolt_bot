@@ -1,15 +1,44 @@
 import logging
+import os
+from pathlib import Path
+
 import requests
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
-TELEGRAM_TOKEN = 'ВАШ_ТОКЕН_БОТА'                   # замени этим свой токен от BotFather
-LM_STUDIO_ENDPOINT = 'http://127.0.0.1:1234/v1/chat/completions'  # сюда ставь URL из LM Studio
+DEFAULT_CHAT_MODEL = "gpt-oss-20b"
+DEFAULT_CARD_MODEL = "google/gemma-3n-e4b:2"
+DEFAULT_ENDPOINT = "http://127.0.0.1:1234/v1/chat/completions"
+
+
+def load_env_file(env_file: str = ".env") -> None:
+    """Загружает переменные окружения из локального .env, если он существует."""
+    env_path = Path(env_file)
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+        value = value.strip().strip('"').strip("'")
+        os.environ[key] = value
+
+
+load_env_file()
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+LM_STUDIO_ENDPOINT = os.getenv("LM_STUDIO_ENDPOINT", DEFAULT_ENDPOINT)
+LM_STUDIO_MODEL = os.getenv("LM_STUDIO_MODEL", DEFAULT_CHAT_MODEL)
+LM_STUDIO_CARD_MODEL = os.getenv("LM_STUDIO_CARD_MODEL", DEFAULT_CARD_MODEL)
 
 # Функция для отправки промпта к LM Studio (OpenAI-совместимый API)
 def ask_lmstudio(prompt):
     payload = {
-        "model": "gpt-oss-20b",    # подставь своё имя модели
+        "model": LM_STUDIO_MODEL,
         "messages": [
             {"role": "system", "content": "Ты helpful ассистент."},
             {"role": "user", "content": prompt}
@@ -70,7 +99,7 @@ SEO-блок (под описание):
 {product_text}
 """
     payload = {
-        "model": "google/gemma-3n-e4b:2",  # примени имя своей модели
+        "model": LM_STUDIO_CARD_MODEL,
         "messages": [
             {"role": "system", "content": "Ты профессионал по генерации товарных карточек."},
             {"role": "user", "content": prompt}
@@ -95,6 +124,8 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Ошибка при общении с LM Studio: {str(e)}")
 
 if __name__ == '__main__':
+    if not TELEGRAM_TOKEN:
+        raise RuntimeError("TELEGRAM_TOKEN не задан: добавьте его в .env или окружение")
     logging.basicConfig(level=logging.INFO)
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
