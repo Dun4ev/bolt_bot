@@ -1,0 +1,219 @@
+diff --git a/bolt_bot.py b/bolt_bot.py
+index e3beecc..2bb0068 100644
+--- a/bolt_bot.py
++++ b/bolt_bot.py
+@@ -1,6 +1,7 @@
+ import logging
+ import os
+ from pathlib import Path
++from typing import Any, Dict, List
+ 
+ import requests
+ from telegram import Update
+@@ -9,6 +10,21 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Con
+ DEFAULT_CHAT_MODEL = "gpt-oss-20b"
+ DEFAULT_CARD_MODEL = "google/gemma-3n-e4b:2"
+ DEFAULT_ENDPOINT = "http://127.0.0.1:1234/v1/chat/completions"
++DEFAULT_BACKEND = "lm_studio"
++DEFAULT_GEMINI_MODEL = "gemini-1.5-flash"
++GEMINI_ENDPOINT_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
++POEM_PROMPT = """
++Ты — талантливый поэт, пишущий на русском языке. По заданному слову или фразе создай короткое стихотворение из 4–8 строк.
++
++Требования:
++- используй литературный русский язык и ритм;
++- допускается любая рифма, но избегай повторов;
++- обязательно упомяни исходное слово или фразу;
++- добавь эмоциональный оттенок (лирический или вдохновляющий).
++
++Вот исходная тема:
++{product_text}
++"""
+ 
+ 
+ def load_env_file(env_file: str = ".env") -> None:
+@@ -34,83 +50,105 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+ LM_STUDIO_ENDPOINT = os.getenv("LM_STUDIO_ENDPOINT", DEFAULT_ENDPOINT)
+ LM_STUDIO_MODEL = os.getenv("LM_STUDIO_MODEL", DEFAULT_CHAT_MODEL)
+ LM_STUDIO_CARD_MODEL = os.getenv("LM_STUDIO_CARD_MODEL", DEFAULT_CARD_MODEL)
++LLM_BACKEND = os.getenv("LLM_BACKEND", DEFAULT_BACKEND).lower()
++GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
++GEMINI_MODEL = os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
+ 
+-# Функция для отправки промпта к LM Studio (OpenAI-совместимый API)
++if LLM_BACKEND == "gemini" and not GEMINI_API_KEY:
++    raise RuntimeError("Для backend=gemini необходимо указать GEMINI_API_KEY в окружении")
++
++# Функция для отправки промпта к выбранному backend
+ def ask_lmstudio(prompt):
+-    payload = {
+-        "model": LM_STUDIO_MODEL,
+-        "messages": [
+-            {"role": "system", "content": "Ты helpful ассистент."},
+-            {"role": "user", "content": prompt}
+-        ],
+-        "max_tokens": 512,
+-        "temperature": 0.7
+-    }
+-    resp = requests.post(LM_STUDIO_ENDPOINT, json=payload)
+-    resp.raise_for_status()
+-    content = resp.json()
+-    return content["choices"][0]["message"]["content"]
++    messages = [
++        {"role": "system", "content": "Ты helpful ассистент."},
++        {"role": "user", "content": prompt}
++    ]
++    return call_chat_backend(messages, LM_STUDIO_MODEL, temperature=0.7, max_tokens=1024)
+ 
+ # -----------------------------
+ # Пример функции и промпта для генерации товарной карточки с помощью LLM
+ 
+ def ask_llm(product_text):
+-    """
+-    Формирует промпт для создания товарной карточки на маркетплейсы (Wildberries, Ozon, Яндекс.Маркет)
+-    и отправляет его в LM Studio (или аналогичный endpoint) для генерации результата.
+-    
+-    Пример промпта, который отправляется модели:
+-
+-    Ты — эксперт по созданию карточек товаров для маркетплейсов (Wildberries, Ozon, Яндекс.Маркет).
+-    По кратким характеристикам товара создай полную товарную карточку.
+-
+-    Формат ответа:
+-    Название:
+-    <краткое, привлекательное название>
+-    Краткое описание (2–3 предложения):
+-    <описание>
+-    Преимущества:
+-    - пункт 1
+-    - пункт 2
+-    - пункт 3
+-    SEO-блок (под описание):
+-    <абзац с ключевыми словами>
+-    Вот характеристики товара:
+-    {product_text}
+-    """
+-    prompt = f"""
+-Ты — эксперт по созданию карточек товаров для маркетплейсов (Wildberries, Ozon, Яндекс.Маркет).
+-По кратким характеристикам товара создай полную товарную карточку.
+-
+-Формат ответа:
+-Название:
+-<краткое, привлекательное название>
+-Краткое описание (2–3 предложения):
+-<описание>
+-Преимущества:
+-- пункт 1
+-- пункт 2
+-- пункт 3
+-
+-SEO-блок (под описание):
+-<абзац с ключевыми словами>
+-
+-Вот характеристики товара:  
+-{product_text}
+-"""
+-    payload = {
+-        "model": LM_STUDIO_CARD_MODEL,
+-        "messages": [
+-            {"role": "system", "content": "Ты профессионал по генерации товарных карточек."},
+-            {"role": "user", "content": prompt}
+-        ],
+-        "temperature": 0.4
++    """Генерирует стихотворение по входной теме с помощью шаблона POEM_PROMPT."""
++    prompt = POEM_PROMPT.format(product_text=product_text)
++    messages = [
++        {"role": "system", "content": "Ты профессионал по написанию стихов на русском языке."},
++        {"role": "user", "content": prompt}
++    ]
++    return call_chat_backend(messages, LM_STUDIO_CARD_MODEL, temperature=0.4)
++
++
++def call_chat_backend(
++    messages: List[Dict[str, str]],
++    model_name: str,
++    temperature: float = 0.7,
++    max_tokens: int | None = None,
++) -> str:
++    """Отправляет запрос в выбранный LLM backend и возвращает текст ответа."""
++    target_model = model_name
++    if LLM_BACKEND == "gemini":
++        target_model = GEMINI_MODEL or model_name
++        return call_gemini_backend(messages, target_model, temperature, max_tokens)
++    return call_lm_studio_backend(messages, target_model, temperature, max_tokens)
++
++
++def call_lm_studio_backend(
++    messages: List[Dict[str, str]],
++    model_name: str,
++    temperature: float,
++    max_tokens: int | None,
++) -> str:
++    payload: Dict[str, Any] = {
++        "model": model_name or LM_STUDIO_MODEL,
++        "messages": messages,
++        "temperature": temperature,
+     }
+-    resp = requests.post(LM_STUDIO_ENDPOINT, json=payload)
++    if max_tokens is not None:
++        payload["max_tokens"] = max_tokens
++    resp = requests.post(LM_STUDIO_ENDPOINT, json=payload, timeout=30)
+     resp.raise_for_status()
+     content = resp.json()
+     return content["choices"][0]["message"]["content"]
+ 
++
++def call_gemini_backend(
++    messages: List[Dict[str, str]],
++    model_name: str,
++    temperature: float,
++    max_tokens: int | None,
++) -> str:
++    system_parts = [msg["content"] for msg in messages if msg.get("role") == "system"]
++    conversation = [msg for msg in messages if msg.get("role") != "system"]
++    payload: Dict[str, Any] = {
++        "contents": [
++            {
++                "role": ("user" if msg.get("role") != "assistant" else "model"),
++                "parts": [{"text": msg.get("content", "")}],
++            }
++            for msg in conversation
++        ]
++    }
++    if system_parts:
++        payload["systemInstruction"] = {
++            "parts": [{"text": "\n\n".join(system_parts)}]
++        }
++    gen_config: Dict[str, Any] = {"temperature": temperature}
++    if max_tokens is not None:
++        gen_config["maxOutputTokens"] = max_tokens
++    payload["generationConfig"] = gen_config
++    endpoint = GEMINI_ENDPOINT_TEMPLATE.format(model=(model_name or GEMINI_MODEL))
++    params = {"key": GEMINI_API_KEY}
++    resp = requests.post(endpoint, params=params, json=payload, timeout=30)
++    resp.raise_for_status()
++    content = resp.json()
++    candidates = content.get("candidates", [])
++    if not candidates:
++        raise RuntimeError("Gemini API не вернул кандидатов")
++    parts = candidates[0].get("content", {}).get("parts", [])
++    if not parts:
++        raise RuntimeError("Gemini API не вернул текстовый ответ")
++    return parts[0].get("text", "")
++
+ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+     await update.message.reply_text("Привет! Жду твой промпт.")
+ 
+diff --git a/.env.example b/.env.example
+new file mode 100644
+index 0000000..a7cfa4c
+--- /dev/null
++++ b/.env.example
+@@ -0,0 +1,8 @@
++# Копируйте этот файл в .env и подставляйте реальные значения.
++TELEGRAM_TOKEN=<telegram-bot-token>
++LM_STUDIO_ENDPOINT=http://127.0.0.1:1234/v1/chat/completions
++LM_STUDIO_MODEL=gpt-oss-20b
++LM_STUDIO_CARD_MODEL=google/gemma-3n-e4b:2
++LLM_BACKEND=lm_studio
++GEMINI_API_KEY=
++GEMINI_MODEL=gemini-1.5-flash
