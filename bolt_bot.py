@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import requests
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -32,6 +32,9 @@ POEM_PROMPT = """
 Вот исходная тема:
 {product_text}
 """
+POEM_HINT = "Напишите слово или фразу, и я составлю стихотворение."
+POEM_BUTTON = "📝 Стихотворение"
+BACKEND_BUTTON = "⚙️ Выбрать backend"
 
 
 def load_env_file(env_file: str = ".env") -> None:
@@ -162,6 +165,12 @@ def call_gemini_backend(
     return parts[0].get("text", "")
 
 
+def main_menu_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [[POEM_BUTTON], [BACKEND_BUTTON]], resize_keyboard=True
+    )
+
+
 def backend_options_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         InlineKeyboardButton("LM Studio (локально)", callback_data="backend:lm_studio")
@@ -202,10 +211,24 @@ def describe_backend(backend: str) -> str:
     return "LM Studio"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Жду твой промпт.")
+    await update.message.reply_text(
+        "Привет! Жду твой промпт.", reply_markup=main_menu_keyboard()
+    )
+
+
+async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Меню доступных действий:", reply_markup=main_menu_keyboard()
+    )
 
 async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    question = update.message.text
+    question = (update.message.text or "").strip()
+    if question == POEM_BUTTON:
+        await update.message.reply_text(POEM_HINT)
+        return
+    if question == BACKEND_BUTTON:
+        await backend_command(update, context)
+        return
     await update.message.reply_text("Думаю...")
     try:
         answer = ask_lmstudio(question)
@@ -222,6 +245,7 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("menu", menu_command))
     app.add_handler(CommandHandler("backend", backend_command))
     app.add_handler(CallbackQueryHandler(backend_callback, pattern=r"^backend:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, reply))

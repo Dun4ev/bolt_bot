@@ -1,0 +1,84 @@
+diff --git a/AGENTS.md b/AGENTS.md
+index cb95e57..b29e0ed 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -30,7 +30,7 @@ pytest -q                        # минимальные регрессионн
+ - По умолчанию `LLM_BACKEND=lm_studio` и запросы идут в локальный OpenAI-совместимый сервер LM Studio, адрес настраивайте через `LM_STUDIO_ENDPOINT`.
+ - Чтобы использовать Google AI Studio (Gemini), пропишите в `.env` `LLM_BACKEND=gemini`, укажите `GEMINI_API_KEY` и нужную модель в `GEMINI_MODEL` (например, `gemini-1.5-flash`).
+ - При backend=gemini ключ обязателен: отсутствие `GEMINI_API_KEY` приводит к ошибке запуска. Остальные переменные (Telegram токен, LM Studio параметры) остаются для локального режима и резервного использования.
+-- В режиме работы бота пользователи могут вызвать `/backend` для выбора источника ответов (LM Studio или Gemini); выбор влияет на все последующие сообщения без перезапуска.
++- В режиме работы бота доступны команды `/menu` и `/backend`: первая показывает клавиатуру с кнопками («Стихотворение», «Выбрать backend»), вторая открывает inline-меню для переключения источника ответов. Выбор действует до следующего переключения.
+ 
+ ## Документация и версии — LITE
+ **Источник правды по агентам:** один файл `AGENTS.md`. Если в проекте встречается `GEMINI.md` — перенеси релевантное и удали файл-двойник (единый контекст снижает риски рассинхронизации).
+diff --git a/bolt_bot.py b/bolt_bot.py
+index e17e8aa..2f05bb6 100644
+--- a/bolt_bot.py
++++ b/bolt_bot.py
+@@ -4,7 +4,7 @@ from pathlib import Path
+ from typing import Any, Dict, List
+ 
+ import requests
+-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
++from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
+ from telegram.ext import (
+     ApplicationBuilder,
+     CallbackQueryHandler,
+@@ -32,6 +32,9 @@ POEM_PROMPT = """
+ Вот исходная тема:
+ {product_text}
+ """
++POEM_HINT = "Напишите слово или фразу, и я составлю стихотворение."
++POEM_BUTTON = "📝 Стихотворение"
++BACKEND_BUTTON = "⚙️ Выбрать backend"
+ 
+ 
+ def load_env_file(env_file: str = ".env") -> None:
+@@ -162,6 +165,12 @@ def call_gemini_backend(
+     return parts[0].get("text", "")
+ 
+ 
++def main_menu_keyboard() -> ReplyKeyboardMarkup:
++    return ReplyKeyboardMarkup(
++        [[POEM_BUTTON], [BACKEND_BUTTON]], resize_keyboard=True
++    )
++
++
+ def backend_options_keyboard() -> InlineKeyboardMarkup:
+     buttons = [
+         InlineKeyboardButton("LM Studio (локально)", callback_data="backend:lm_studio")
+@@ -202,10 +211,24 @@ def describe_backend(backend: str) -> str:
+     return "LM Studio"
+ 
+ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+-    await update.message.reply_text("Привет! Жду твой промпт.")
++    await update.message.reply_text(
++        "Привет! Жду твой промпт.", reply_markup=main_menu_keyboard()
++    )
++
++
++async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
++    await update.message.reply_text(
++        "Меню доступных действий:", reply_markup=main_menu_keyboard()
++    )
+ 
+ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+-    question = update.message.text
++    question = (update.message.text or "").strip()
++    if question == POEM_BUTTON:
++        await update.message.reply_text(POEM_HINT)
++        return
++    if question == BACKEND_BUTTON:
++        await backend_command(update, context)
++        return
+     await update.message.reply_text("Думаю...")
+     try:
+         answer = ask_lmstudio(question)
+@@ -222,6 +245,7 @@ if __name__ == '__main__':
+     logging.basicConfig(level=logging.INFO)
+     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+     app.add_handler(CommandHandler("start", start))
++    app.add_handler(CommandHandler("menu", menu_command))
+     app.add_handler(CommandHandler("backend", backend_command))
+     app.add_handler(CallbackQueryHandler(backend_callback, pattern=r"^backend:"))
+     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, reply))
