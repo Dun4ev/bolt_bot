@@ -26,9 +26,10 @@ pytest -q                        # минимальные регрессионн
 Токены Telegram задавайте через `TELEGRAM_TOKEN` в окружении или `.env` (не коммить). Хост LM Studio передавайте параметром или переменной `LM_STUDIO_ENDPOINT`, не хардкодьте пользовательские адреса. Валидируйте входящие тексты: ограничивайте длину, фильтруйте команды и логируйте подозрительный ввод.
 
 ### Переключение LLM backend
-- В `.env` поддерживаются переменные: `LM_STUDIO_ENDPOINT`, `LM_STUDIO_MODEL`, `LM_STUDIO_CARD_MODEL`, `LLM_BACKEND`, `GEMINI_API_KEY`, `GEMINI_MODEL`.
+- В `.env` поддерживаются переменные: `LM_STUDIO_ENDPOINT`, `LM_STUDIO_MODEL`, `LM_STUDIO_CARD_MODEL`, `LLM_BACKEND`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_TIMEOUT`, `LM_STUDIO_TIMEOUT`.
 - По умолчанию `LLM_BACKEND=lm_studio` и запросы идут в локальный OpenAI-совместимый сервер LM Studio, адрес настраивайте через `LM_STUDIO_ENDPOINT`.
-- Чтобы использовать Google AI Studio (Gemini), пропишите в `.env` `LLM_BACKEND=gemini`, укажите `GEMINI_API_KEY` и нужную модель в `GEMINI_MODEL` (например, `gemini-1.5-flash`).
+- Чтобы использовать Google AI Studio (Gemini), пропишите в `.env` `LLM_BACKEND=gemini`, укажите `GEMINI_API_KEY` и нужную модель в `GEMINI_MODEL` (по умолчанию `gemini-2.0-flash`).
+- Бот автоматически повторяет запросы к Gemini при ошибке 429 (Too Many Requests) и поддерживает настройку таймаутов через `GEMINI_TIMEOUT` (по умолчанию 60с) и `LM_STUDIO_TIMEOUT` (по умолчанию 30с).
 - При backend=gemini ключ обязателен: отсутствие `GEMINI_API_KEY` приводит к ошибке запуска. Остальные переменные (Telegram токен, LM Studio параметры) остаются для локального режима и резервного использования.
 - В режиме работы бота доступны команды `/menu` и `/backend`: первая показывает клавиатуру с кнопками («Стихотворение», «Выбрать backend»), вторая открывает inline-меню для переключения источника ответов. Выбор действует до следующего переключения.
 

@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List
 
+import time
+import random
 import requests
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
 from telegram.ext import (
@@ -18,8 +20,11 @@ DEFAULT_CHAT_MODEL = "gpt-oss-20b"
 DEFAULT_CARD_MODEL = "google/gemma-3n-e4b:2"
 DEFAULT_ENDPOINT = "http://127.0.0.1:1234/v1/chat/completions"
 DEFAULT_BACKEND = "lm_studio"
-DEFAULT_GEMINI_MODEL = "gemini-1.5-flash"
+DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
 GEMINI_ENDPOINT_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+DEFAULT_GEMINI_TIMEOUT = 60
+DEFAULT_LM_STUDIO_TIMEOUT = 30
+
 POEM_PROMPT = """
 Ты — талантливый поэт, пишущий на русском языке. По заданному слову или фразе создай короткое стихотворение из 4–8 строк.
 
@@ -63,6 +68,10 @@ LM_STUDIO_CARD_MODEL = os.getenv("LM_STUDIO_CARD_MODEL", DEFAULT_CARD_MODEL)
 LLM_BACKEND = os.getenv("LLM_BACKEND", DEFAULT_BACKEND).lower()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
+
+# Timeouts
+GEMINI_TIMEOUT = int(os.getenv("GEMINI_TIMEOUT", DEFAULT_GEMINI_TIMEOUT))
+LM_STUDIO_TIMEOUT = int(os.getenv("LM_STUDIO_TIMEOUT", DEFAULT_LM_STUDIO_TIMEOUT))
 
 GEMINI_ENABLED = bool(GEMINI_API_KEY)
 
@@ -120,7 +129,7 @@ def call_lm_studio_backend(
     }
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens
-    resp = requests.post(LM_STUDIO_ENDPOINT, json=payload, timeout=30)
+    resp = requests.post(LM_STUDIO_ENDPOINT, json=payload, timeout=LM_STUDIO_TIMEOUT)
     resp.raise_for_status()
     content = resp.json()
     return content["choices"][0]["message"]["content"]
@@ -153,8 +162,22 @@ def call_gemini_backend(
     payload["generationConfig"] = gen_config
     endpoint = GEMINI_ENDPOINT_TEMPLATE.format(model=(model_name or GEMINI_MODEL))
     params = {"key": GEMINI_API_KEY}
-    resp = requests.post(endpoint, params=params, json=payload, timeout=30)
-    resp.raise_for_status()
+    
+    for attempt in range(1, 6):
+        try:
+            resp = requests.post(endpoint, params=params, json=payload, timeout=GEMINI_TIMEOUT)
+            resp.raise_for_status()
+            break
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 429:
+                if attempt == 5:
+                    raise
+                sleep_time = (2 ** attempt) + (random.randint(0, 1000) / 1000)
+                logging.warning(f"Gemini 429 Rate Limit. Retrying in {sleep_time:.2f}s (Attempt {attempt}/5)")
+                time.sleep(sleep_time)
+                continue
+            raise
+
     content = resp.json()
     candidates = content.get("candidates", [])
     if not candidates:
@@ -224,14 +247,23 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     question = (update.message.text or "").strip()
     if question == POEM_BUTTON:
+        context.user_data["mode"] = "poem"
         await update.message.reply_text(POEM_HINT)
         return
     if question == BACKEND_BUTTON:
         await backend_command(update, context)
         return
+
     await update.message.reply_text("Думаю...")
+    
     try:
-        answer = ask_lmstudio(question)
+        if context.user_data.get("mode") == "poem":
+            answer = ask_llm(question)
+            # Reset mode after answering
+            context.user_data["mode"] = None
+        else:
+            answer = ask_lmstudio(question)
+        
         await update.message.reply_text(answer)
     except Exception as e:
         backend_name = describe_backend(CURRENT_BACKEND)
