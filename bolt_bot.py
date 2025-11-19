@@ -2,6 +2,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, List
+from functools import wraps
 
 import time
 import random
@@ -68,6 +69,25 @@ LM_STUDIO_CARD_MODEL = os.getenv("LM_STUDIO_CARD_MODEL", DEFAULT_CARD_MODEL)
 LLM_BACKEND = os.getenv("LLM_BACKEND", DEFAULT_BACKEND).lower()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
+
+# Configuration
+ALLOWED_USER_IDS = [
+    int(uid.strip())
+    for uid in os.getenv("ALLOWED_USER_IDS", "288410478").split(",")
+    if uid.strip()
+]
+
+def user_allowed(func):
+    @wraps(func)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        user_id = update.effective_user.id
+        if user_id not in ALLOWED_USER_IDS:
+            await update.message.reply_text(
+                "Извините, у вас нет доступа к этому боту. Обратитесь к администратору @jxx15 для получения доступа"
+            )
+            return
+        return await func(update, context, *args, **kwargs)
+    return wrapper
 
 # Timeouts
 GEMINI_TIMEOUT = int(os.getenv("GEMINI_TIMEOUT", DEFAULT_GEMINI_TIMEOUT))
@@ -206,12 +226,14 @@ def backend_options_keyboard() -> InlineKeyboardMarkup:
     return keyboard
 
 
+@user_allowed
 async def backend_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Выберите источник ответов:", reply_markup=backend_options_keyboard()
     )
 
 
+@user_allowed
 async def backend_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -233,17 +255,20 @@ def describe_backend(backend: str) -> str:
         return "Gemini (Google AI Studio)"
     return "LM Studio"
 
+@user_allowed
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Привет! Жду твой промпт.", reply_markup=main_menu_keyboard()
     )
 
 
+@user_allowed
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Меню доступных действий:", reply_markup=main_menu_keyboard()
     )
 
+@user_allowed
 async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     question = (update.message.text or "").strip()
     if question == POEM_BUTTON:
